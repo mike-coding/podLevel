@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import ChannelGraph from './components/ChannelGraph.jsx'
 
 export default function App() {
-  const [message, setMessage] = useState('...')
   const [channelId, setChannelId] = useState('')
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
@@ -11,7 +10,6 @@ export default function App() {
   return (
     <div style={{ fontFamily: 'system-ui', padding: 24 }}>
       <h1>Pod Level YouTube Channel Lookup</h1>
-      <p>{message}</p>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 16 }}>
         <input
           type="text"
