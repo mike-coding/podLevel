@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState, useEffect, useRef } from 'react'
 
 function parseDurationToSeconds(iso) {
   if (!iso || typeof iso !== 'string') return 0
@@ -50,12 +50,37 @@ function computeDerived(items) {
   }))
 }
 
-export default function ChannelGraph({ items = [], yKey = 'viewCount', width = 640, height = 360, padding = 32 }) {
+export default function ChannelGraph({ items = [], yKey = 'viewCount', width, height = 360, padding = 32 }) {
+  const containerRef = useRef(null)
+  const [containerW, setContainerW] = useState(640)
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const update = () => setContainerW(el.clientWidth)
+    update()
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => update())
+      ro.observe(el)
+      return () => ro.disconnect()
+    } else {
+      window.addEventListener('resize', update)
+      return () => window.removeEventListener('resize', update)
+    }
+  }, [])
+
+  const svgW = typeof width === 'number' ? width : containerW
+  // Provide extra left padding for y-axis tick labels to avoid clipping
+  const padLeft = padding + 32
+  const padRight = padding
+  const padTop = padding
+  const padBottom = padding + 24
   const xKey = 'daysSinceOrigination'
   const data = useMemo(() => computeDerived(items), [items])
   const n = data.length
-  const innerW = width - padding * 2
-  const innerH = height - padding * 2
+  const innerW = svgW - padLeft - padRight
+  const innerH = height - padTop - padBottom
 
   const getVal = (row, key) => {
     const v = row[key]
@@ -68,12 +93,12 @@ export default function ChannelGraph({ items = [], yKey = 'viewCount', width = 6
   const maxY = useMemo(() => (n ? Math.max(...data.map((d) => getVal(d, yKey))) : 0), [data, yKey, n])
 
   const xToPx = (x) => {
-    if (maxX === minX) return width / 2
-    return padding + ((x - minX) / (maxX - minX)) * innerW
+    if (maxX === minX) return padLeft + innerW / 2
+    return padLeft + ((x - minX) / (maxX - minX)) * innerW
   }
   const yToPx = (y) => {
     if (maxY === minY) return height / 2
-    return height - padding - ((y - minY) / (maxY - minY)) * innerH
+    return height - padBottom - ((y - minY) / (maxY - minY)) * innerH
   }
 
   const points = data.map((d) => ({
@@ -90,7 +115,7 @@ export default function ChannelGraph({ items = [], yKey = 'viewCount', width = 6
     likeCount: 'Likes',
     commentCount: 'Comments',
     durationSeconds: 'Duration (sec)',
-    hourOfDay: 'Hour of Day',
+    hourOfDay: 'Hour of Day (UTC)',
     daysSinceOrigination: 'Days Since Origination (days)',
   }
   const xLabel = labelMap[xKey] || xKey
@@ -119,18 +144,18 @@ export default function ChannelGraph({ items = [], yKey = 'viewCount', width = 6
   const [hover, setHover] = useState(null) // { p, px, py }
 
   return (
-    <div style={{ position: 'relative', width, height }}>
-      <svg width={width} height={height} style={{ border: '1px solid #ddd', background: '#fafafa' }}>
-        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#999" />
-        <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#999" />
+    <div ref={containerRef} style={{ position: 'relative', width: '100%', height }}>
+      <svg width={svgW} height={height} className="graph-frame">
+        <line x1={padLeft} y1={height - padBottom} x2={svgW - padRight} y2={height - padBottom} stroke="#999" />
+        <line x1={padLeft} y1={padTop} x2={padLeft} y2={height - padBottom} stroke="#999" />
 
         {/* X-axis ticks with units */}
         {xTicks.map((t, i) => {
           const tx = xToPx(t)
           return (
             <g key={`xt-${i}`}>
-              <line x1={tx} y1={height - padding} x2={tx} y2={height - padding + 6} stroke="#bbb" />
-              <text x={tx} y={height - padding + 16} textAnchor="middle" fill="#666" fontSize="11">
+              <line x1={tx} y1={height - padBottom} x2={tx} y2={height - padBottom + 6} stroke="#bbb" />
+              <text x={tx} y={height - padBottom + 16} textAnchor="middle" className="tick-text" fontSize="11">
                 {formatTick(t, xKey)}
               </text>
             </g>
@@ -142,8 +167,8 @@ export default function ChannelGraph({ items = [], yKey = 'viewCount', width = 6
           const ty = yToPx(t)
           return (
             <g key={`yt-${i}`}>
-              <line x1={padding - 6} y1={ty} x2={padding} y2={ty} stroke="#bbb" />
-              <text x={padding - 8} y={ty + 4} textAnchor="end" fill="#666" fontSize="11">
+              <line x1={padLeft - 6} y1={ty} x2={padLeft} y2={ty} stroke="#bbb" />
+              <text x={padLeft - 8} y={ty + 4} textAnchor="end" className="tick-text" fontSize="11">
                 {formatTick(t, yKey)}
               </text>
             </g>
@@ -151,7 +176,7 @@ export default function ChannelGraph({ items = [], yKey = 'viewCount', width = 6
         })}
 
         {n > 0 && (
-          <polyline points={polyline} fill="none" stroke="#1976d2" strokeWidth="2" />
+          <polyline points={polyline} fill="none" className="line-primary" strokeWidth="2" />
         )}
 
         {points.map((p, i) => {
@@ -163,17 +188,17 @@ export default function ChannelGraph({ items = [], yKey = 'viewCount', width = 6
               cx={px}
               cy={py}
               r={4}
-              fill="#1976d2"
+              className="point"
               onMouseEnter={() => setHover({ p, px, py })}
               onMouseLeave={() => setHover(null)}
             />
           )
         })}
 
-        <text x={width / 2} y={height - 8} textAnchor="middle" fill="#666" fontSize="12">
+        <text x={svgW / 2} y={height - 8} textAnchor="middle" className="axis-text" fontSize="12">
           {xLabel}
         </text>
-        <text x={16} y={16} fill="#666" fontSize="12">
+        <text x={16} y={16} className="axis-text" fontSize="12">
           {yLabel}
         </text>
       </svg>
@@ -182,7 +207,7 @@ export default function ChannelGraph({ items = [], yKey = 'viewCount', width = 6
         <div
           style={{
             position: 'absolute',
-            left: Math.min(Math.max(hover.px + 10, 8), width - 220),
+            left: Math.min(Math.max(hover.px + 10, 8), svgW - 220),
             top: Math.min(Math.max(hover.py - 10, 8), height - 140),
             width: 210,
             background: 'white',
@@ -197,7 +222,9 @@ export default function ChannelGraph({ items = [], yKey = 'viewCount', width = 6
         >
           <div style={{ fontWeight: 600, marginBottom: 6 }}>{hover.p.item?.snippet?.title || 'Untitled'}</div>
           <div style={{ marginBottom: 4, color: '#666' }}>
-            Published: {hover.p.item?.snippet?.publishedAt ? new Date(hover.p.item.snippet.publishedAt).toLocaleString() : '—'}
+            Published (UTC): {hover.p.item?.snippet?.publishedAt
+              ? new Date(hover.p.item.snippet.publishedAt).toLocaleString(undefined, { timeZone: 'UTC' })
+              : '—'}
           </div>
           <div>Likes: {Number(hover.p.item?.statistics?.likeCount ?? 0).toLocaleString()}</div>
           <div>Comments: {Number(hover.p.item?.statistics?.commentCount ?? 0).toLocaleString()}</div>
@@ -214,7 +241,7 @@ export default function ChannelGraph({ items = [], yKey = 'viewCount', width = 6
               href={`https://www.youtube.com/watch?v=${hover.p.item?.id || ''}`}
               target="_blank"
               rel="noreferrer"
-              style={{ color: '#1976d2' }}
+              className="link"
             >
               Open episode ↗
             </a>
