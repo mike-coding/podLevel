@@ -3,6 +3,7 @@ import json
 import pandas as pd
 import re
 from datetime import datetime, timezone
+from sklearn.preprocessing import StandardScaler
 
 class Requester:
     api_key = ""
@@ -114,7 +115,7 @@ class Requester:
         return all_video_data
     
     @staticmethod
-    def get_channel_videos_request(channel_or_handle, debug_shape=True):
+    def get_channel_videos_request(channel_or_handle, debug_shape=False):
         # Ensure we have an API key available for testing
         if not Requester.api_key:
             try:
@@ -328,6 +329,17 @@ class Formatter:
             cat_dummies = pd.get_dummies(df['categoryId'], prefix='cat', dtype='Int64')
             df = pd.concat([df, cat_dummies], axis=1)
 
+        # dayOfWeek -> one-hot encoded (dow_0..dow_6)
+        if 'dayOfWeek' in df.columns:
+            dow_dummies = pd.get_dummies(df['dayOfWeek'], prefix='dow', dtype='Int64')
+            # Ensure consistent 7 columns even if some days are missing
+            for d in range(7):
+                col = f'dow_{d}'
+                if col not in dow_dummies.columns:
+                    dow_dummies[col] = 0
+            dow_dummies = dow_dummies[[f'dow_{d}' for d in range(7)]]
+            df = pd.concat([df, dow_dummies], axis=1)
+
         # Convert hasCaptions to binary int 0/1
         df['hasCaptions'] = df['hasCaptions'].map({True: 1, False: 0}).fillna(0).astype('Int64')
 
@@ -336,9 +348,10 @@ class Formatter:
             'viewCount', 'likeCount', 'commentCount', 'durationSeconds',
             'numTags', 'titleLength', 'descriptionLength',
             'publishedTimestamp', 'daysSinceOrigination', 'daysSinceLastVideo',
-            'hourOfDay', 'dayOfWeek', 'hasCaptions'
+            'hourOfDay', 'hasCaptions'
         ]
         feature_cols += [c for c in df.columns if c.startswith('cat_')]
+        feature_cols += [c for c in df.columns if c.startswith('dow_')]
 
         df_features = df[feature_cols].copy()
         # Ensure numeric dtypes and fill missing with 0.0
@@ -347,4 +360,80 @@ class Formatter:
         df_features = df_features.astype('float64')
 
         return df_features
-        
+
+class ML_Tools:
+
+    @staticmethod
+    def standardize_features(df: pd.DataFrame) -> pd.DataFrame:
+        # Assumes df is numeric-only (as returned by Formatter.videos_to_dataframe)
+        if df.empty:
+            return df.copy()
+
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(df.values)
+        # Preserve column names and index
+        df_scaled = pd.DataFrame(X_scaled, columns=df.columns, index=df.index)
+        return df_scaled
+    
+    @staticmethod
+    def run_linear_regression(df: pd.DataFrame, target_column: str):
+        from sklearn.linear_model import LinearRegression
+        from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+        from sklearn.model_selection import train_test_split
+
+        if target_column not in df.columns:
+            raise ValueError(f"Target column '{target_column}' not found in DataFrame")
+
+        X = df.drop(columns=[target_column])
+        y = df[target_column]
+
+        if X.shape[1] == 0:
+            raise ValueError("No feature columns available after dropping target")
+
+        # Train/test split when dataset is large enough
+        n_samples = len(df)
+        if n_samples >= 5:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=42
+            )
+        else:
+            # For tiny datasets, fit on all data and evaluate on train
+            X_train, y_train = X, y
+            X_test, y_test = X, y
+
+        model = LinearRegression()
+        model.fit(X_train, y_train)
+
+        y_pred = model.predict(X_test)
+        mse = mean_squared_error(y_test, y_pred)
+        rmse = mse ** 0.5
+        metrics = {
+            'r2': float(r2_score(y_test, y_pred)),
+            'mae': float(mean_absolute_error(y_test, y_pred)),
+            'mse': float(mse),
+            'rmse': float(rmse),
+        }
+
+        coef_map = {col: float(coef) for col, coef in zip(X.columns, model.coef_)}
+
+        return {
+            'model': model,
+            'coefficients': coef_map,
+            'intercept': float(model.intercept_),
+            'metrics': metrics,
+            'n_train': int(len(X_train)),
+            'n_test': int(len(X_test)),
+        }
+    
+    @staticmethod
+    def print_regression_summary(lr_result: dict):
+        print("Linear Regression Summary:")
+        print(f"Number of training samples: {lr_result['n_train']}")
+        print(f"Number of testing samples: {lr_result['n_test']}")
+        print("Metrics:")
+        for metric, value in lr_result['metrics'].items():
+            print(f"  {metric}: {value:.4f}")
+        print("Coefficients:")
+        for feature, coef in lr_result['coefficients'].items():
+            print(f"  {feature}: {coef:.4f}")
+        print(f"Intercept: {lr_result['intercept']:.4f}")
