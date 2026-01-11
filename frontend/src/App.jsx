@@ -6,15 +6,13 @@ export default function App() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const axisOptions = [
+  const yAxisOptions = [
     { key: 'viewCount', label: 'Views' },
     { key: 'likeCount', label: 'Likes' },
     { key: 'commentCount', label: 'Comments' },
     { key: 'durationSeconds', label: 'Duration (sec)' },
-    { key: 'daysSinceOrigination', label: 'Days Since Origination' },
     { key: 'hourOfDay', label: 'Hour of Day' },
   ]
-  const [xKey, setXKey] = useState('daysSinceOrigination')
   const [yKey, setYKey] = useState('viewCount')
 
   return (
@@ -53,17 +51,9 @@ export default function App() {
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 16 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          X:
-          <select value={xKey} onChange={(e) => setXKey(e.target.value)} style={{ padding: 6 }}>
-            {axisOptions.map(opt => (
-              <option key={opt.key} value={opt.key}>{opt.label}</option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           Y:
           <select value={yKey} onChange={(e) => setYKey(e.target.value)} style={{ padding: 6 }}>
-            {axisOptions.map(opt => (
+            {yAxisOptions.map(opt => (
               <option key={opt.key} value={opt.key}>{opt.label}</option>
             ))}
           </select>
@@ -71,7 +61,7 @@ export default function App() {
       </div>
 
       <div style={{ marginTop: 24 }}>
-        <ChannelGraph items={items} xKey={xKey} yKey={yKey} width={800} height={380} />
+        <ChannelGraph items={items} yKey={yKey} width={800} height={380} />
         <div style={{ marginTop: 8, color: '#666' }}>
           {items.length > 0 ? `Loaded ${items.length} videos` : 'No videos loaded'}
         </div>

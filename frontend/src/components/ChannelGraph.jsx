@@ -50,7 +50,8 @@ function computeDerived(items) {
   }))
 }
 
-export default function ChannelGraph({ items = [], xKey = 'daysSinceOrigination', yKey = 'viewCount', width = 640, height = 360, padding = 32 }) {
+export default function ChannelGraph({ items = [], yKey = 'viewCount', width = 640, height = 360, padding = 32 }) {
+  const xKey = 'daysSinceOrigination'
   const data = useMemo(() => computeDerived(items), [items])
   const n = data.length
   const innerW = width - padding * 2
@@ -84,6 +85,37 @@ export default function ChannelGraph({ items = [], xKey = 'daysSinceOrigination'
 
   const polyline = points.map((p) => `${xToPx(p.x)},${yToPx(p.y)}`).join(' ')
 
+  const labelMap = {
+    viewCount: 'Views',
+    likeCount: 'Likes',
+    commentCount: 'Comments',
+    durationSeconds: 'Duration (sec)',
+    hourOfDay: 'Hour of Day',
+    daysSinceOrigination: 'Days Since Origination (days)',
+  }
+  const xLabel = labelMap[xKey] || xKey
+  const yLabel = labelMap[yKey] || yKey
+
+  const computeTicks = (min, max, count = 5) => {
+    if (!isFinite(min) || !isFinite(max)) return []
+    if (max === min) return [min]
+    const step = (max - min) / (count - 1)
+    const ticks = []
+    for (let i = 0; i < count; i++) ticks.push(min + i * step)
+    return ticks
+  }
+
+  const formatTick = (val, key) => {
+    const v = Math.round(val)
+    if (key === 'durationSeconds') return `${v}s`
+    if (key === 'hourOfDay') return `${v}h`
+    if (key === 'daysSinceOrigination') return `${v}d`
+    return Number(v).toLocaleString()
+  }
+
+  const xTicks = computeTicks(minX, maxX)
+  const yTicks = computeTicks(minY, maxY)
+
   const [hover, setHover] = useState(null) // { p, px, py }
 
   return (
@@ -91,6 +123,32 @@ export default function ChannelGraph({ items = [], xKey = 'daysSinceOrigination'
       <svg width={width} height={height} style={{ border: '1px solid #ddd', background: '#fafafa' }}>
         <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#999" />
         <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#999" />
+
+        {/* X-axis ticks with units */}
+        {xTicks.map((t, i) => {
+          const tx = xToPx(t)
+          return (
+            <g key={`xt-${i}`}>
+              <line x1={tx} y1={height - padding} x2={tx} y2={height - padding + 6} stroke="#bbb" />
+              <text x={tx} y={height - padding + 16} textAnchor="middle" fill="#666" fontSize="11">
+                {formatTick(t, xKey)}
+              </text>
+            </g>
+          )
+        })}
+
+        {/* Y-axis ticks with units */}
+        {yTicks.map((t, i) => {
+          const ty = yToPx(t)
+          return (
+            <g key={`yt-${i}`}>
+              <line x1={padding - 6} y1={ty} x2={padding} y2={ty} stroke="#bbb" />
+              <text x={padding - 8} y={ty + 4} textAnchor="end" fill="#666" fontSize="11">
+                {formatTick(t, yKey)}
+              </text>
+            </g>
+          )
+        })}
 
         {n > 0 && (
           <polyline points={polyline} fill="none" stroke="#1976d2" strokeWidth="2" />
@@ -113,10 +171,10 @@ export default function ChannelGraph({ items = [], xKey = 'daysSinceOrigination'
         })}
 
         <text x={width / 2} y={height - 8} textAnchor="middle" fill="#666" fontSize="12">
-          {xKey}
+          {xLabel}
         </text>
         <text x={16} y={16} fill="#666" fontSize="12">
-          {yKey}
+          {yLabel}
         </text>
       </svg>
 
@@ -145,10 +203,10 @@ export default function ChannelGraph({ items = [], xKey = 'daysSinceOrigination'
           <div>Comments: {Number(hover.p.item?.statistics?.commentCount ?? 0).toLocaleString()}</div>
           <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
             <span>
-              x={xKey}: {hover.p.x}
+              X: {xLabel}: {hover.p.x}
             </span>
             <span>
-              y={yKey}: {hover.p.y}
+              Y: {yLabel}: {yKey === 'durationSeconds' ? `${hover.p.y}s` : hover.p.y}
             </span>
           </div>
           <div style={{ marginTop: 8, textAlign: 'right' }}>
