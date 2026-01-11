@@ -1,5 +1,8 @@
 import requests
 import json
+import pandas as pd
+import re
+from datetime import datetime, timezone
 
 class Requester:
     api_key = ""
@@ -224,4 +227,124 @@ class DebugTools:
             json.dump(shape, f, indent=2, ensure_ascii=False)
 
 class Formatter:
-    pass
+    @staticmethod
+    def videos_to_dataframe(videos_json):
+        rows = []
+        for video in videos_json:
+            snippet = video.get('snippet', {})
+            statistics = video.get('statistics', {})
+            content_details = video.get('contentDetails', {})
+
+            # Raw fields
+            published_at = snippet.get('publishedAt')
+            duration_iso = content_details.get('duration')
+            caption_raw = content_details.get('caption')  # 'true'/'false' or missing
+            category_id = snippet.get('categoryId')
+            tags = snippet.get('tags') or []
+
+            row = {
+                'videoId': video.get('id'),
+                'title': snippet.get('title'),
+                'publishedAt': published_at,
+                'description': snippet.get('description'),
+                'viewCount': int(statistics.get('viewCount', 0) or 0),
+                'likeCount': int(statistics.get('likeCount', 0) or 0),
+                'commentCount': int(statistics.get('commentCount', 0) or 0),
+                'duration': duration_iso,
+                'categoryId': category_id,
+                'hasCaptionsRaw': caption_raw,
+                'numTags': len(tags),
+                'titleLength': len(snippet.get('title') or ''),
+                'descriptionLength': len(snippet.get('description') or ''),
+            }
+            rows.append(row)
+
+        df = pd.DataFrame(rows)
+
+        # Parse publishedAt to timezone-aware datetime (UTC) and epoch seconds
+        if 'publishedAt' in df.columns:
+            df['publishedAt_dt'] = pd.to_datetime(df['publishedAt'], utc=True, errors='coerce')
+            # Unix timestamp seconds using Timestamp.timestamp() which handles tz-aware
+            df['publishedTimestamp'] = (
+                df['publishedAt_dt'].apply(lambda x: int(x.timestamp()) if pd.notnull(x) else pd.NA)
+            ).astype('Int64')
+
+            # Derived time-based features
+            if df['publishedAt_dt'].notna().any():
+                min_dt = df['publishedAt_dt'].min(skipna=True)
+                max_dt = df['publishedAt_dt'].max(skipna=True)
+                df['daysSinceOrigination'] = ((df['publishedAt_dt'] - min_dt).dt.days).astype('Int64')
+                df['daysSinceLastVideo'] = ((max_dt - df['publishedAt_dt']).dt.days).astype('Int64')
+                # Use apply to avoid static analysis complaints on .dt.hour
+                df['hourOfDay'] = df['publishedAt_dt'].apply(lambda x: x.hour if pd.notnull(x) else pd.NA).astype('Int64')
+                df['dayOfWeek'] = df['publishedAt_dt'].apply(lambda x: x.dayofweek if pd.notnull(x) else pd.NA).astype('Int64')
+            else:
+                df['daysSinceOrigination'] = pd.Series([None] * len(df), dtype='Int64')
+                df['daysSinceLastVideo'] = pd.Series([None] * len(df), dtype='Int64')
+                df['hourOfDay'] = pd.Series([None] * len(df), dtype='Int64')
+                df['dayOfWeek'] = pd.Series([None] * len(df), dtype='Int64')
+
+        # ISO 8601 duration to seconds
+        def parse_iso8601_duration_to_seconds(s: str) -> int:
+            if not isinstance(s, str) or not s:
+                return 0
+            # Pattern like PT#H#M#S (any subset)
+            m = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", s)
+            if not m:
+                # Sometimes YouTube may include days: P#DT#H#M#S; handle D optionally
+                m2 = re.fullmatch(r"P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", s)
+                if not m2:
+                    return 0
+                days = int(m2.group(1) or 0)
+                hours = int(m2.group(2) or 0)
+                minutes = int(m2.group(3) or 0)
+                seconds = int(m2.group(4) or 0)
+                return days * 86400 + hours * 3600 + minutes * 60 + seconds
+            hours = int(m.group(1) or 0)
+            minutes = int(m.group(2) or 0)
+            seconds = int(m.group(3) or 0)
+            return hours * 3600 + minutes * 60 + seconds
+
+        df['durationSeconds'] = df['duration'].apply(parse_iso8601_duration_to_seconds).astype('Int64')
+
+        # has_captions -> bool derived from contentDetails.caption ('true'/'false')
+        def to_bool(x):
+            if isinstance(x, bool):
+                return x
+            if isinstance(x, str):
+                x = x.strip().lower()
+                if x in ('true', '1', 'yes'):
+                    return True
+                if x in ('false', '0', 'no'):
+                    return False
+            return None
+
+        df['hasCaptions'] = df['hasCaptionsRaw'].apply(to_bool)
+
+        # category -> categoryId (one-hot encoded)
+        if 'categoryId' in df.columns:
+            # Keep raw categoryId as string for consistency
+            df['categoryId'] = df['categoryId'].astype(str)
+            cat_dummies = pd.get_dummies(df['categoryId'], prefix='cat', dtype='Int64')
+            df = pd.concat([df, cat_dummies], axis=1)
+
+        # Convert hasCaptions to binary int 0/1
+        df['hasCaptions'] = df['hasCaptions'].map({True: 1, False: 0}).fillna(0).astype('Int64')
+
+        # Build scikit-learn ready features: numeric-only, no NaNs
+        feature_cols = [
+            'viewCount', 'likeCount', 'commentCount', 'durationSeconds',
+            'numTags', 'titleLength', 'descriptionLength',
+            'publishedTimestamp', 'daysSinceOrigination', 'daysSinceLastVideo',
+            'hourOfDay', 'dayOfWeek', 'hasCaptions'
+        ]
+        feature_cols += [c for c in df.columns if c.startswith('cat_')]
+
+        df_features = df[feature_cols].copy()
+        # Ensure numeric dtypes and fill missing with 0.0
+        df_features = df_features.apply(pd.to_numeric, errors='coerce').fillna(0.0)
+        # Cast to float64 for uniformity across estimators
+        df_features = df_features.astype('float64')
+
+        return df_features
+        

@@ -9,7 +9,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily: 'system-ui', padding: 24 }}>
-      <h1>Pod Level YouTube Channel Lookup</h1>
+      <h1>Pod Level - YouTube Channel Lookup</h1>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 16 }}>
         <input
           type="text"
