@@ -274,9 +274,32 @@ class Formatter:
             if df['publishedAt_dt'].notna().any():
                 min_dt = df['publishedAt_dt'].min(skipna=True)
                 max_dt = df['publishedAt_dt'].max(skipna=True)
-                df['daysSinceOrigination'] = ((df['publishedAt_dt'] - min_dt).dt.days).astype('Int64')
-                df['daysSinceLastVideo'] = ((max_dt - df['publishedAt_dt']).dt.days).astype('Int64')
-                # Use apply to avoid static analysis complaints on .dt.hour
+
+                # Days since first upload (channel sequence index in days)
+                ds_orig_secs = (df['publishedAt_dt'] - min_dt).astype('timedelta64[s]')
+                ds_orig_days = ds_orig_secs / (24 * 3600)
+                df['daysSinceOrigination'] = (
+                    pd.to_numeric(ds_orig_days, errors='coerce')
+                    .round()
+                    .fillna(0)
+                    .astype('Int64')
+                )
+
+                # Cadence: days since previous upload (chronological diff)
+                df_sorted = df.sort_values('publishedAt_dt')
+                diffs = df_sorted['publishedAt_dt'].diff()
+                diffs_secs = diffs.astype('timedelta64[s]')
+                diffs_days_num = diffs_secs / (24 * 3600)
+                diffs_days_num = (
+                    pd.to_numeric(diffs_days_num, errors='coerce')
+                    .round()
+                    .fillna(0)
+                    .astype('Int64')
+                )
+                # Map back to original order
+                df.loc[df_sorted.index, 'daysSinceLastVideo'] = diffs_days_num
+
+                # Use apply to avoid static analysis complaints on datetime accessors
                 df['hourOfDay'] = df['publishedAt_dt'].apply(lambda x: x.hour if pd.notnull(x) else pd.NA).astype('Int64')
                 df['dayOfWeek'] = df['publishedAt_dt'].apply(lambda x: x.dayofweek if pd.notnull(x) else pd.NA).astype('Int64')
             else:
@@ -364,6 +387,68 @@ class Formatter:
 class ML_Tools:
 
     @staticmethod
+    def compute_trend_slope(
+        df: pd.DataFrame,
+        target_column: str,
+        time_column: str = 'daysSinceOrigination',
+    ) -> dict | None:
+        """Compute an overall linear trend (best-fit slope) of target vs time.
+
+        Returns a JSON-serializable dict with slope/intercept/r2, or None if
+        there isn't enough usable data.
+
+        Slope units are: (target units) per (time_column units).
+        For the default time_column, slope is "per day".
+        """
+        from sklearn.linear_model import LinearRegression
+        from sklearn.metrics import r2_score
+
+        if df is None or df.empty:
+            return None
+        if target_column not in df.columns:
+            return None
+        if time_column not in df.columns:
+            return None
+
+        x = pd.to_numeric(df[time_column], errors='coerce')
+        y = pd.to_numeric(df[target_column], errors='coerce')
+        valid = x.notna() & y.notna()
+        x = x[valid]
+        y = y[valid]
+
+        if len(x) < 2:
+            return None
+        if x.nunique(dropna=True) < 2:
+            return None
+
+        X = x.to_numpy().reshape(-1, 1)
+        y_arr = y.to_numpy()
+
+        model = LinearRegression()
+        model.fit(X, y_arr)
+        y_pred = model.predict(X)
+
+        slope = float(model.coef_[0])
+        intercept = float(model.intercept_)
+        r2 = float(r2_score(y_arr, y_pred))
+
+        direction = 'up' if slope > 0 else ('down' if slope < 0 else 'flat')
+        avg = float(y.mean()) if len(y) else 0.0
+        pct_per_unit = float((slope / avg) * 100.0) if avg != 0 else None
+
+        return {
+            'timeColumn': time_column,
+            'targetColumn': target_column,
+            'slope': slope,
+            'intercept': intercept,
+            'r2': r2,
+            'n': int(len(x)),
+            'direction': direction,
+            'avgTarget': avg,
+            'pctChangePerTimeUnit': pct_per_unit,
+        }
+
+    @staticmethod
     def standardize_features(df: pd.DataFrame) -> pd.DataFrame:
         # Assumes df is numeric-only (as returned by Formatter.videos_to_dataframe)
         if df.empty:
@@ -376,7 +461,12 @@ class ML_Tools:
         return df_scaled
     
     @staticmethod
-    def run_linear_regression(df: pd.DataFrame, target_column: str):
+    def run_linear_regression(
+        df: pd.DataFrame,
+        target_column: str,
+        trend_df: pd.DataFrame | None = None,
+        trend_time_column: str = 'daysSinceOrigination',
+    ):
         from sklearn.linear_model import LinearRegression
         from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
         from sklearn.model_selection import train_test_split
@@ -416,7 +506,7 @@ class ML_Tools:
 
         coef_map = {col: float(coef) for col, coef in zip(X.columns, model.coef_)}
 
-        return {
+        result = {
             'model': model,
             'coefficients': coef_map,
             'intercept': float(model.intercept_),
@@ -424,6 +514,19 @@ class ML_Tools:
             'n_train': int(len(X_train)),
             'n_test': int(len(X_test)),
         }
+
+        # Overall up/down trend: best-fit slope of target vs time
+        try:
+            trend_source = trend_df if trend_df is not None else df
+            result['trend'] = ML_Tools.compute_trend_slope(
+                trend_source,
+                target_column=target_column,
+                time_column=trend_time_column,
+            )
+        except Exception:
+            result['trend'] = None
+
+        return result
     
     @staticmethod
     def print_regression_summary(lr_result: dict):
@@ -433,6 +536,17 @@ class ML_Tools:
         print("Metrics:")
         for metric, value in lr_result['metrics'].items():
             print(f"  {metric}: {value:.4f}")
+        trend = lr_result.get('trend')
+        if isinstance(trend, dict) and trend.get('slope') is not None:
+            slope = trend.get('slope')
+            direction = trend.get('direction')
+            time_col = trend.get('timeColumn')
+            pct = trend.get('pctChangePerTimeUnit')
+            print("Overall Trend:")
+            print(f"  direction: {direction}")
+            print(f"  slope ({trend.get('targetColumn')} per {time_col}): {slope:.4f}")
+            if isinstance(pct, (int, float)):
+                print(f"  pctChangePerTimeUnit: {pct:.4f}%")
         print("Coefficients:")
         for feature, coef in lr_result['coefficients'].items():
             print(f"  {feature}: {coef:.4f}")

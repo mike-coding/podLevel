@@ -5,7 +5,13 @@ export default function Statistics({ mlData }) {
     return <div className="subtitle">ML data unavailable</div>
   }
 
-  const { metrics = {}, intercept, coefficients = {}, n_train, n_test } = mlData
+  const { metrics = {}, intercept, coefficients = {}, n_train, n_test, trend } = mlData
+
+  const formatNum = (val, digits = 4) => {
+    if (typeof val !== 'number' || !isFinite(val)) return '—'
+    if (Math.abs(val) >= 1000) return val.toLocaleString(undefined, { maximumFractionDigits: digits })
+    return val.toFixed(digits)
+  }
 
   const coefEntries = Object.entries(coefficients || {})
     .map(([name, value]) => ({ name, value }))
@@ -28,6 +34,30 @@ export default function Statistics({ mlData }) {
               </li>
             )}
           </ul>
+        </div>
+
+        <div className="stats-box">
+          <h3 className="panel-title">Overall Trend</h3>
+          {!trend || typeof trend !== 'object' || typeof trend.slope !== 'number' ? (
+            <div className="subtitle">Trend slope unavailable</div>
+          ) : (
+            <ul className="stats-list">
+              <li><strong>direction:</strong> {String(trend.direction ?? '—')}</li>
+              <li>
+                <strong>slope:</strong> {formatNum(trend.slope, 4)}{' '}
+                <span className="subtitle">({String(trend.targetColumn ?? 'target')} per {String(trend.timeColumn ?? 'time')})</span>
+              </li>
+              {typeof trend.pctChangePerTimeUnit === 'number' && (
+                <li><strong>% change per unit:</strong> {formatNum(trend.pctChangePerTimeUnit, 3)}%</li>
+              )}
+              {typeof trend.r2 === 'number' && (
+                <li><strong>trend r2:</strong> {formatNum(trend.r2, 4)}</li>
+              )}
+              {typeof trend.n === 'number' && (
+                <li><strong>points:</strong> {trend.n}</li>
+              )}
+            </ul>
+          )}
         </div>
 
         <div className="stats-box">

@@ -12,7 +12,12 @@ def channel_videos(channel_id):
     data = Requester.get_channel_videos_request(channel_id)
     features = Formatter.videos_to_dataframe(data)
     features_std = ML_Tools.standardize_features(features)
-    lr_result = ML_Tools.run_linear_regression(features_std, target_column='viewCount')
+    lr_result = ML_Tools.run_linear_regression(
+        features_std,
+        target_column='viewCount',
+        trend_df=features,
+        trend_time_column='daysSinceOrigination',
+    )
     # Return JSON-safe result (exclude non-serializable model)
     lr_json = {k: v for k, v in lr_result.items() if k != 'model'}
     return jsonify(items=data, data_ml=lr_json)

@@ -108,7 +108,53 @@ export default function ChannelGraph({ items = [], yKey = 'viewCount', width, he
     date: d.date,
   }))
 
+  const bestFit = useMemo(() => {
+    if (!points || points.length < 2) return null
+    const xs = points.map((p) => p.x).filter((x) => typeof x === 'number' && isFinite(x))
+    if (new Set(xs).size < 2) return null
+
+    let nFit = 0
+    let sumX = 0
+    let sumY = 0
+    let sumXY = 0
+    let sumXX = 0
+
+    for (const p of points) {
+      const x = p.x
+      const y = p.y
+      if (typeof x !== 'number' || !isFinite(x) || typeof y !== 'number' || !isFinite(y)) continue
+      nFit += 1
+      sumX += x
+      sumY += y
+      sumXY += x * y
+      sumXX += x * x
+    }
+
+    if (nFit < 2) return null
+    const denom = nFit * sumXX - sumX * sumX
+    if (denom === 0) return null
+
+    const slope = (nFit * sumXY - sumX * sumY) / denom
+    const intercept = (sumY - slope * sumX) / nFit
+    return { slope, intercept, n: nFit }
+  }, [points])
+
   const polyline = points.map((p) => `${xToPx(p.x)},${yToPx(p.y)}`).join(' ')
+
+  const fitLine = useMemo(() => {
+    if (!bestFit || n < 2) return null
+    const x1 = minX
+    const x2 = maxX
+    if (!isFinite(x1) || !isFinite(x2) || x1 === x2) return null
+    const y1 = bestFit.slope * x1 + bestFit.intercept
+    const y2 = bestFit.slope * x2 + bestFit.intercept
+    return {
+      x1Px: xToPx(x1),
+      y1Px: yToPx(y1),
+      x2Px: xToPx(x2),
+      y2Px: yToPx(y2),
+    }
+  }, [bestFit, minX, maxX, n, xToPx, yToPx])
 
   const labelMap = {
     viewCount: 'Views',
@@ -194,6 +240,33 @@ export default function ChannelGraph({ items = [], yKey = 'viewCount', width, he
             />
           )
         })}
+
+        {/* Draw trend line last so it sits on top of series + points */}
+        {fitLine && (
+          <g pointerEvents="none">
+            {/* underlay for contrast */}
+            <line
+              x1={fitLine.x1Px}
+              y1={fitLine.y1Px}
+              x2={fitLine.x2Px}
+              y2={fitLine.y2Px}
+              stroke="#000"
+              strokeOpacity="0.45"
+              strokeWidth="6"
+              strokeLinecap="round"
+            />
+            {/* visible dashed trend */}
+            <line
+              x1={fitLine.x1Px}
+              y1={fitLine.y1Px}
+              x2={fitLine.x2Px}
+              y2={fitLine.y2Px}
+              className="line-fit"
+              strokeWidth="3"
+              strokeLinecap="round"
+            />
+          </g>
+        )}
 
         <text x={svgW / 2} y={height - 8} textAnchor="middle" className="axis-text" fontSize="12">
           {xLabel}

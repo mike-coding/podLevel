@@ -85,5 +85,6 @@ body {
 .axis-text { fill: var(--muted); }
 .tick-text { fill: var(--muted); }
 .line-primary { stroke: var(--accent); }
+.line-fit { stroke: #f59e0b; stroke-dasharray: 6 6; opacity: 0.95; }
 .point { fill: var(--accent); }
 .link { color: var(--primary); }
